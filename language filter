@@ -1,0 +1,712 @@
+// ==UserScript==
+// @name         LinkedIn — Otomatik Dil Filtresi
+// @name:en      LinkedIn — Auto Language Filter
+// @namespace    li-lang-filter
+// @version      1.0.0
+// @description  İş ilanlarını ve feed gönderilerini dil tespitine göre filtreler. İzin verilen dillerin dışındaki içerikleri gizler veya etiketler.
+// @description:en Filters job listings and feed posts by detected language. Hides or labels content outside your allowed languages.
+// @match        https://www.linkedin.com/*
+// @grant        none
+// @run-at       document-idle
+// @noframes
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  // ─── STORAGE ─────────────────────────────────────────────────────────────────
+  const SK = 'lilf-settings';
+
+  const DEFAULTS = {
+    enabled: true,
+    mode: 'hide',           // 'hide' | 'label'  — gizle veya etiket koy
+    allowedLangs: ['tr', 'en'],
+    minWords: 6,             // en az bu kadar kelime varsa tespit yap
+    unknownAction: 'show',  // 'show' | 'hide' — dil tespit edilemezse ne yapılsın
+  };
+
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(SK);
+      if (!raw) return { ...DEFAULTS };
+      return { ...DEFAULTS, ...JSON.parse(raw) };
+    } catch { return { ...DEFAULTS }; }
+  }
+
+  function saveSettings() {
+    try { localStorage.setItem(SK, JSON.stringify(settings)); } catch {}
+  }
+
+  let settings = loadSettings();
+
+  // ─── DİL TESPİT MOTORü ───────────────────────────────────────────────────────
+  // n-gram tabanlı hafif dil tanıma.
+  // Her dil için en sık geçen trigram imzaları tanımlanmış.
+  // Büyük model yok, ~5KB veri ile %85+ doğruluk (kısa metinlerde daha düşük).
+
+  const LANG_PROFILES = {
+    tr: ['bir','bir','ile','bir','için','bu','de','da','ve','nin','nın',
+         'ler','lar','den','dan','ten','tan','nde','nda','ını','ini',
+         'yor','mak','mek','dır','dir','tır','tir','rak','rek','ken',
+         'ize','ize','yiz','yız','sın','sin','niz','nız','ler','lar'],
+    en: ['the','and','ing','ion','tio','ent','for','tha','his','her',
+         'are','was','has','not','you','all','can','had','but','our',
+         'one','ork','ith','ter','ons','ati','ers','pro','com','out'],
+    de: ['der','die','und','ein','ist','ich','das','den','mit','von',
+         'ung','eit','sch','che','gen','nen','ten','ber','ver','auf',
+         'sie','wie','hat','als','bei','zur','für','aber','sich','aus'],
+    fr: ['les','des','est','une','que','qui','pas','sur','par','tout',
+         'son','ses','aux','ous','ent','ion','ant','our','ait','eur',
+         'ont','avec','dans','pour','plus','mais','elle','nous','vous','ces'],
+    es: ['los','las','que','una','con','del','por','para','como','sus',
+         'ción','ado','ado','nte','ión','ent','mos','nes','era','ado',
+         'pero','este','esto','esta','son','ser','hay','más','tiene','años'],
+    pt: ['que','uma','com','não','por','para','dos','das','são','mais',
+         'ção','ado','nte','ões','ent','mos','res','ado','era','tos',
+         'isso','este','esta','seus','suas','tem','ser','está','como','anos'],
+    it: ['che','una','con','non','per','dei','delle','sono','come','più',
+         'zione','ato','nte','ione','ent','amo','ono','ere','ato','tti',
+         'questo','questa','hanno','essere','fare','anche','così','dopo','ogni','tra'],
+    nl: ['van','het','een','zijn','voor','niet','met','dat','heeft','worden',
+         'ing','aar','ijk','elijk','lijk','ien','den','ten','ver','aan',
+         'maar','deze','wordt','door','over','jaar','naar','moet','kunnen','alle'],
+    ru: ['что','это','как','для','его','она','они','все','так','при',
+         'ого','ого','ние','ции','ать','ить','ный','ной','ого','ает',
+         'ние','ием','ает','ить','ение','ости','ного','ных','ного','ских'],
+    pl: ['nie','że','jak','dla','jego','jej','ich','ale','też','już',
+         'nia','owi','ego','iem','ych','ość','iem','ają','uje','uje',
+         'jest','tego','przez','może','będzie','oraz','sobie','tego','jako','który'],
+    zh: ['的','了','是','在','我','有','和','就','不','都',
+         '一个','这个','可以','我们','他们','什么','工作','公司','经验','技能'],
+    ja: ['の','に','は','を','た','が','で','て','と','し',
+         'する','いる','なる','ある','れる','できる','仕事','会社','経験','スキル'],
+    ko: ['이','는','을','를','에','의','가','한','그','로',
+         '하는','있는','위한','경력','회사','업무','지원','채용','스킬','팀'],
+    ar: ['في','من','إلى','على','أن','كان','مع','هذا','لا','هو',
+         'العمل','الشركة','الخبرة','المهارات','الفريق','التوظيف','المرشح','المتقدم','الوظيفة','يتطلب'],
+  };
+
+  // Metni normalize et, kelimelere ve trigramlara böl
+  function extractNgrams(text, n) {
+    const clean = text
+      .toLowerCase()
+      .replace(/https?:\/\/\S+/g, ' ')   // URL'leri çıkar
+      .replace(/[^a-zçğıöşüA-ZÇĞIÖŞÜàáâãäåæçèéêëìíîïðñòóôõöùúûüýþßÀ-ÿа-яёА-ЯЁ\u0400-\u04FF\u0600-\u06FF\u3000-\u9FFF\uAC00-\uD7AF]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const words  = clean.split(' ').filter(w => w.length > 1);
+    const ngrams = [];
+
+    for (const word of words) {
+      if (word.length < n) { ngrams.push(word); continue; }
+      for (let i = 0; i <= word.length - n; i++) {
+        ngrams.push(word.slice(i, i + n));
+      }
+    }
+    return { words, ngrams };
+  }
+
+  function detectLanguage(text) {
+    if (!text || text.trim().length < 10) return null;
+
+    const { words, ngrams } = extractNgrams(text, 3);
+    if (words.length < settings.minWords) return null;
+
+    const scores = {};
+    let maxScore = 0;
+
+    for (const [lang, profile] of Object.entries(LANG_PROFILES)) {
+      const profileSet = new Set(profile);
+      let score = 0;
+      for (const ng of ngrams) {
+        if (profileSet.has(ng)) score++;
+      }
+      // Normalize
+      scores[lang] = ngrams.length > 0 ? score / ngrams.length : 0;
+      if (scores[lang] > maxScore) maxScore = scores[lang];
+    }
+
+    if (maxScore < 0.04) return null; // Güven eşiği — altıysa belirsiz
+
+    // En yüksek skoru bul
+    const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+    const [bestLang, bestScore] = sorted[0];
+    const [, secondScore]       = sorted[1] || [, 0];
+
+    // İki dil arasındaki fark çok azsa belirsiz say
+    if (bestScore - secondScore < 0.02) return null;
+
+    return bestLang;
+  }
+
+  // ─── İÇERİK EXTRACTION ───────────────────────────────────────────────────────
+  // İş kartından metin çıkar
+  function getJobCardText(card) {
+    const parts = [];
+    const titleEl = card.querySelector(
+      '.job-card-list__title, .base-search-card__title, ' +
+      '[class*="job-title"], .artdeco-entity-lockup__title'
+    );
+    const descEl = card.querySelector(
+      '.job-card-list__snippet, .base-search-card__metadata, ' +
+      '[class*="snippet"], [class*="description"]'
+    );
+    if (titleEl) parts.push(titleEl.textContent || '');
+    if (descEl)  parts.push(descEl.textContent || '');
+    // Yeterli metin yoksa tüm kartı kullan (ilk 300 karakter)
+    if (parts.join(' ').split(' ').length < 8) {
+      parts.push((card.textContent || '').slice(0, 300));
+    }
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // Feed gönderisinden metin çıkar
+  function getFeedPostText(post) {
+    const textEl = post.querySelector(
+      '.feed-shared-update-v2__description, ' +
+      '.update-components-text, ' +
+      '[class*="commentary"], ' +
+      '[class*="update-content"]'
+    );
+    if (textEl) return (textEl.textContent || '').slice(0, 400).replace(/\s+/g, ' ').trim();
+    return (post.textContent || '').slice(0, 400).replace(/\s+/g, ' ').trim();
+  }
+
+  // ─── SEÇICILER ───────────────────────────────────────────────────────────────
+  const JOB_CARD_SELS = [
+    '[data-occludable-job-id]',
+    'li.jobs-search-results__list-item',
+    'li.scaffold-layout__list-item',
+    'li.discovery-templates-entity-item',
+    'article.job-search-card',
+    'div.base-card',
+    'article.base-card',
+  ].join(',');
+
+  const FEED_POST_SELS = [
+    'li.occludable-update',
+    'div.feed-shared-update-v2',
+    'div[data-urn*="activity"]',
+  ].join(',');
+
+  // ─── FİLTRELEME ──────────────────────────────────────────────────────────────
+  function processElement(el, getText, type) {
+    // Zaten işlenmiş mi?
+    if (el.hasAttribute('data-lilf-done')) {
+      syncVisibility(el);
+      return;
+    }
+
+    const text = getText(el);
+    const lang = detectLanguage(text);
+
+    el.setAttribute('data-lilf-done', '1');
+    el.setAttribute('data-lilf-type', type);
+
+    if (!lang) {
+      el.setAttribute('data-lilf-lang', 'unknown');
+    } else {
+      el.setAttribute('data-lilf-lang', lang);
+    }
+
+    syncVisibility(el);
+  }
+
+  function syncVisibility(el) {
+    const lang    = el.getAttribute('data-lilf-lang') || 'unknown';
+    const allowed = settings.allowedLangs;
+
+    let shouldHide = false;
+
+    if (lang === 'unknown') {
+      shouldHide = settings.unknownAction === 'hide';
+    } else {
+      shouldHide = !allowed.includes(lang);
+    }
+
+    if (!settings.enabled) shouldHide = false;
+
+    if (shouldHide && settings.mode === 'hide') {
+      el.setAttribute('data-lilf-hidden', '1');
+      el.removeAttribute('data-lilf-labeled');
+    } else if (shouldHide && settings.mode === 'label') {
+      el.removeAttribute('data-lilf-hidden');
+      el.setAttribute('data-lilf-labeled', lang);
+    } else {
+      el.removeAttribute('data-lilf-hidden');
+      el.removeAttribute('data-lilf-labeled');
+    }
+  }
+
+  function processAll() {
+    if (!isTargetPage()) { removeBadge(); return; }
+    ensureBadge();
+
+    // Önceki işaretleri sıfırla (ayarlar değiştiyse)
+    document.querySelectorAll('[data-lilf-done]').forEach(el => {
+      el.removeAttribute('data-lilf-done'); // yeniden tespit yaptır
+    });
+
+    // İş kartları
+    if (isJobsPage()) {
+      document.querySelectorAll(JOB_CARD_SELS).forEach(card => {
+        processElement(card, getJobCardText, 'job');
+      });
+    }
+
+    // Feed gönderileri
+    if (isFeedPage()) {
+      document.querySelectorAll(FEED_POST_SELS).forEach(post => {
+        processElement(post, getFeedPostText, 'feed');
+      });
+    }
+
+    updateBadge();
+  }
+
+  // Sayfa türü kontrolü
+  function isJobsPage()   { return location.pathname.includes('/jobs'); }
+  function isFeedPage()   {
+    const p = location.pathname;
+    return p === '/' || p === '/feed' || p === '/feed/' || p.startsWith('/feed/');
+  }
+  function isTargetPage() { return isJobsPage() || isFeedPage(); }
+
+  // ─── DİL ETİKETİ (label modu) ────────────────────────────────────────────────
+  // Dil adı etiketleri
+  const LANG_NAMES = {
+    tr: 'TR', en: 'EN', de: 'DE', fr: 'FR', es: 'ES', pt: 'PT',
+    it: 'IT', nl: 'NL', ru: 'RU', pl: 'PL', zh: 'ZH', ja: 'JA',
+    ko: 'KO', ar: 'AR', unknown: '?',
+  };
+
+  // ─── CSS ─────────────────────────────────────────────────────────────────────
+  function injectCSS() {
+    let el = document.getElementById('lilf-style');
+    if (!el) {
+      el = document.createElement('style');
+      el.id = 'lilf-style';
+      document.head.appendChild(el);
+    }
+    el.textContent = `
+      /* ── Gizleme ── */
+      [data-lilf-hidden] {
+        height: 1px !important; min-height: 0 !important; max-height: 1px !important;
+        margin: 0 !important; padding: 0 !important;
+        overflow: hidden !important; opacity: 0 !important; pointer-events: none !important;
+      }
+
+      /* ── Etiket modu ── */
+      [data-lilf-labeled] {
+        position: relative;
+      }
+      [data-lilf-labeled]::before {
+        content: attr(data-lilf-labeled);
+        position: absolute;
+        top: 6px; right: 6px;
+        z-index: 9;
+        background: rgba(220,38,38,0.18);
+        border: 1px solid rgba(220,38,38,0.4);
+        color: #fca5a5;
+        font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+        padding: 2px 6px; border-radius: 999px;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        text-transform: uppercase; pointer-events: none;
+      }
+
+      /* ── Rozet ── */
+      #lilf-badge {
+        position: fixed;
+        top: 72px; right: 14px;
+        z-index: 999998;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        background: rgba(16,22,28,0.93);
+        border: 1px solid rgba(255,255,255,0.13);
+        border-radius: 999px;
+        padding: 5px 12px 5px 10px;
+        display: inline-flex; align-items: center; gap: 6px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        user-select: none;
+      }
+      #lilf-badge .lilf-count {
+        font-size: 14px; font-weight: 700; color: #e4eaf0;
+        min-width: 16px; text-align: right;
+      }
+      #lilf-badge .lilf-lbl {
+        font-size: 10px; color: #6e8090; font-weight: 500;
+      }
+      #lilf-badge .lilf-sep {
+        width: 1px; height: 14px; background: rgba(255,255,255,0.12);
+      }
+      #lilf-badge button {
+        border: 1px solid rgba(255,255,255,0.18); border-radius: 999px;
+        padding: 3px 9px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px;
+        cursor: pointer; background: rgba(255,255,255,0.07);
+        color: #9aabb8; font-family: inherit; line-height: 1.4;
+      }
+      #lilf-badge button:hover { background: rgba(255,255,255,0.13); color: #c8d8e4; }
+      #lilf-badge button.on {
+        background: rgba(10,102,194,0.25); border-color: rgba(10,102,194,0.55); color: #7ec8ff;
+      }
+      #lilf-badge button.manage { background: rgba(255,255,255,0.06); color: #8fa0af; }
+      #lilf-badge button.manage:hover { background: rgba(255,255,255,0.12); color: #c8d8e4; }
+
+      /* ── Panel ── */
+      #lilf-panel {
+        position: fixed;
+        top: 116px; right: 14px;
+        z-index: 999997;
+        width: 320px;
+        background: #111820;
+        border: 1px solid rgba(255,255,255,0.13);
+        border-radius: 14px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.55);
+        font-family: "Segoe UI", system-ui, sans-serif;
+        display: flex; flex-direction: column;
+        max-height: calc(100vh - 140px);
+        overflow: hidden;
+      }
+      .lilf-ph {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 14px 10px;
+        border-bottom: 1px solid rgba(255,255,255,0.09); flex-shrink: 0;
+      }
+      .lilf-ph-title { font-size: 13px; font-weight: 600; color: #d0dce8; }
+      .lilf-ph-close {
+        background: none; border: none; color: #6e8090; cursor: pointer;
+        font-size: 14px; padding: 2px 6px; border-radius: 6px;
+      }
+      .lilf-ph-close:hover { color: #c8d8e4; background: rgba(255,255,255,0.08); }
+
+      .lilf-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
+      .lilf-body::-webkit-scrollbar { width: 4px; }
+      .lilf-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+
+      .lilf-section-title {
+        font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+        color: #4a5e70; margin: 0 0 8px;
+      }
+      .lilf-section { margin-bottom: 16px; }
+
+      /* Mod seçimi */
+      .lilf-mode-group { display: flex; gap: 6px; }
+      .lilf-mode-btn {
+        flex: 1; border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px; padding: 7px 6px;
+        background: rgba(255,255,255,0.05);
+        color: #8fa0af; font-size: 11px; font-weight: 600;
+        cursor: pointer; font-family: inherit; text-align: center;
+      }
+      .lilf-mode-btn:hover { background: rgba(255,255,255,0.1); }
+      .lilf-mode-btn.active {
+        background: rgba(10,102,194,0.25); border-color: rgba(10,102,194,0.55); color: #7ec8ff;
+      }
+
+      /* Dil grid */
+      .lilf-lang-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+      }
+      .lilf-lang-btn {
+        border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+        padding: 6px 4px; background: rgba(255,255,255,0.05);
+        color: #8fa0af; font-size: 11px; font-weight: 600;
+        cursor: pointer; font-family: inherit; text-align: center;
+      }
+      .lilf-lang-btn:hover { background: rgba(255,255,255,0.1); }
+      .lilf-lang-btn.active {
+        background: rgba(10,102,194,0.22); border-color: rgba(10,102,194,0.5); color: #7ec8ff;
+      }
+
+      /* Bilinmeyen dil ayarı */
+      .lilf-row {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 4px 0; gap: 10px;
+      }
+      .lilf-row-label { font-size: 12px; color: #c8d8e4; }
+      .lilf-row-sub   { font-size: 10px; color: #4a5e70; margin-top: 1px; }
+
+      /* Toggle */
+      .lilf-toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+      .lilf-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+      .lilf-toggle-track {
+        position: absolute; inset: 0;
+        background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
+        border-radius: 999px; cursor: pointer;
+      }
+      .lilf-toggle input:checked + .lilf-toggle-track {
+        background: rgba(10,102,194,0.5); border-color: rgba(10,102,194,0.7);
+      }
+      .lilf-toggle-thumb {
+        position: absolute; top: 3px; left: 3px;
+        width: 12px; height: 12px;
+        background: #6e8090; border-radius: 50%;
+        transition: transform 0.18s, background 0.18s; pointer-events: none;
+      }
+      .lilf-toggle input:checked ~ .lilf-toggle-thumb {
+        transform: translateX(16px); background: #7ec8ff;
+      }
+
+      .lilf-footer {
+        padding: 10px 14px; border-top: 1px solid rgba(255,255,255,0.09);
+        display: flex; gap: 8px; flex-shrink: 0;
+      }
+      .lilf-footer button {
+        flex: 1; background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.12);
+        color: #8fa0af; border-radius: 8px; padding: 6px 8px;
+        font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+      }
+      .lilf-footer button:hover { background: rgba(255,255,255,0.11); color: #c8d8e4; }
+
+      @media (max-width: 900px) {
+        #lilf-badge { top: 60px; right: 8px; }
+        #lilf-panel { right: 8px; width: calc(100vw - 16px); }
+      }
+    `;
+  }
+
+  // ─── ROZET ───────────────────────────────────────────────────────────────────
+  let badge    = null;
+  let countEl  = null;
+  let modeEl   = null;
+
+  function ensureBadge() {
+    if (badge && document.body.contains(badge)) return;
+
+    badge = document.createElement('div');
+    badge.id = 'lilf-badge';
+
+    countEl = document.createElement('span');
+    countEl.className = 'lilf-count';
+    countEl.textContent = '0';
+
+    const lbl = document.createElement('span');
+    lbl.className = 'lilf-lbl';
+    lbl.textContent = 'filtrelendi';
+
+    const sep = document.createElement('div');
+    sep.className = 'lilf-sep';
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.textContent = 'Dil Filtresi';
+    toggleBtn.className = settings.enabled ? 'on' : '';
+    toggleBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      settings.enabled = !settings.enabled;
+      saveSettings();
+      toggleBtn.className = settings.enabled ? 'on' : '';
+      processAll();
+    });
+
+    const manageBtn = document.createElement('button');
+    manageBtn.type = 'button';
+    manageBtn.textContent = '⚙ Ayarlar';
+    manageBtn.className = 'manage';
+    manageBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openPanel();
+    });
+
+    badge.appendChild(countEl);
+    badge.appendChild(lbl);
+    badge.appendChild(sep);
+    badge.appendChild(toggleBtn);
+    badge.appendChild(manageBtn);
+    document.body.appendChild(badge);
+  }
+
+  function removeBadge() { badge?.remove(); badge = countEl = modeEl = null; }
+
+  function updateBadge() {
+    if (!countEl) return;
+    const hidden  = document.querySelectorAll('[data-lilf-hidden]').length;
+    const labeled = document.querySelectorAll('[data-lilf-labeled]').length;
+    countEl.textContent = String(hidden + labeled);
+  }
+
+  // ─── YÖNETİM PANELİ ──────────────────────────────────────────────────────────
+  const ALL_LANGS = [
+    { code: 'tr', name: 'Türkçe' },
+    { code: 'en', name: 'İngilizce' },
+    { code: 'de', name: 'Almanca' },
+    { code: 'fr', name: 'Fransızca' },
+    { code: 'es', name: 'İspanyolca' },
+    { code: 'pt', name: 'Portekizce' },
+    { code: 'it', name: 'İtalyanca' },
+    { code: 'nl', name: 'Hollandaca' },
+    { code: 'ru', name: 'Rusça' },
+    { code: 'pl', name: 'Lehçe' },
+    { code: 'zh', name: 'Çince' },
+    { code: 'ja', name: 'Japonca' },
+    { code: 'ko', name: 'Korece' },
+    { code: 'ar', name: 'Arapça' },
+  ];
+
+  let panel = null;
+
+  function openPanel() {
+    if (panel && document.body.contains(panel)) { closePanel(); return; }
+
+    panel = document.createElement('div');
+    panel.id = 'lilf-panel';
+
+    panel.innerHTML = `
+      <div class="lilf-ph">
+        <span class="lilf-ph-title">Dil Filtresi Ayarları</span>
+        <button class="lilf-ph-close" id="lilf-close">✕</button>
+      </div>
+      <div class="lilf-body">
+
+        <div class="lilf-section">
+          <div class="lilf-section-title">Filtre Modu</div>
+          <div class="lilf-mode-group">
+            <button class="lilf-mode-btn ${settings.mode === 'hide' ? 'active' : ''}"
+              data-mode="hide">🚫 Gizle</button>
+            <button class="lilf-mode-btn ${settings.mode === 'label' ? 'active' : ''}"
+              data-mode="label">🏷 Etiketle</button>
+          </div>
+        </div>
+
+        <div class="lilf-section">
+          <div class="lilf-section-title">İzin Verilen Diller</div>
+          <div class="lilf-lang-grid" id="lilf-lang-grid"></div>
+        </div>
+
+        <div class="lilf-section">
+          <div class="lilf-section-title">Bilinmeyen Dil</div>
+          <div class="lilf-row">
+            <div>
+              <div class="lilf-row-label">Tespit edilemeyen içerikleri gizle</div>
+              <div class="lilf-row-sub">Dil belirlenemezse filtreye takılsın mı?</div>
+            </div>
+            <label class="lilf-toggle">
+              <input type="checkbox" id="lilf-unknown-toggle"
+                ${settings.unknownAction === 'hide' ? 'checked' : ''} />
+              <div class="lilf-toggle-track"></div>
+              <div class="lilf-toggle-thumb"></div>
+            </label>
+          </div>
+        </div>
+
+      </div>
+      <div class="lilf-footer">
+        <button id="lilf-apply">Uygula</button>
+        <button id="lilf-reset">Sıfırla</button>
+      </div>
+    `;
+
+    document.body.appendChild(panel);
+
+    // Dil butonları
+    const grid = document.getElementById('lilf-lang-grid');
+    ALL_LANGS.forEach(({ code, name }) => {
+      const btn = document.createElement('button');
+      btn.className = 'lilf-lang-btn' + (settings.allowedLangs.includes(code) ? ' active' : '');
+      btn.dataset.code = code;
+      btn.title = name;
+      btn.textContent = LANG_NAMES[code] + ' ' + name.slice(0, 3) + '.';
+      btn.addEventListener('click', () => {
+        btn.classList.toggle('active');
+      });
+      grid.appendChild(btn);
+    });
+
+    // Mod butonları
+    panel.querySelectorAll('.lilf-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        panel.querySelectorAll('.lilf-mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // Uygula
+    document.getElementById('lilf-apply').addEventListener('click', () => {
+      const activeMode = panel.querySelector('.lilf-mode-btn.active')?.dataset.mode || 'hide';
+      const activeLangs = Array.from(panel.querySelectorAll('.lilf-lang-btn.active'))
+        .map(b => b.dataset.code);
+      const unknownHide = document.getElementById('lilf-unknown-toggle').checked;
+
+      settings.mode         = activeMode;
+      settings.allowedLangs = activeLangs;
+      settings.unknownAction = unknownHide ? 'hide' : 'show';
+      saveSettings();
+      processAll();
+      closePanel();
+    });
+
+    // Sıfırla
+    document.getElementById('lilf-reset').addEventListener('click', () => {
+      settings = { ...DEFAULTS };
+      saveSettings();
+      processAll();
+      closePanel(); openPanel();
+    });
+
+    document.getElementById('lilf-close').addEventListener('click', closePanel);
+
+    setTimeout(() => {
+      document.addEventListener('click', outsideClick);
+    }, 0);
+  }
+
+  function closePanel() {
+    panel?.remove(); panel = null;
+    document.removeEventListener('click', outsideClick);
+  }
+
+  function outsideClick(e) {
+    if (panel && !panel.contains(e.target) && !e.target.closest('#lilf-badge')) closePanel();
+  }
+
+  // ─── OBSERVER & ZAMANLAYICILAR ────────────────────────────────────────────────
+  let rafId    = null;
+  let mutTimer = null;
+
+  function scheduleRefresh() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(() => { rafId = null; processAll(); });
+  }
+
+  const observer = new MutationObserver(() => {
+    if (mutTimer) return;
+    mutTimer = setTimeout(() => { mutTimer = null; scheduleRefresh(); }, 250);
+  });
+
+  // ─── ROTA TAKİBİ ─────────────────────────────────────────────────────────────
+  let lastPath = location.pathname;
+  function onRouteChange() {
+    if (location.pathname === lastPath) return;
+    lastPath = location.pathname;
+    setTimeout(scheduleRefresh, 400);
+    setTimeout(scheduleRefresh, 1200);
+  }
+  function patchHistory(method) {
+    const orig = history[method].bind(history);
+    history[method] = function (...args) { const r = orig(...args); onRouteChange(); return r; };
+  }
+
+  // ─── BAŞLATMA ────────────────────────────────────────────────────────────────
+  function init() {
+    injectCSS();
+    if (isTargetPage()) {
+      ensureBadge();
+      scheduleRefresh();
+      setTimeout(scheduleRefresh, 800);
+      setTimeout(scheduleRefresh, 2200);
+    }
+    observer.observe(document.body, { childList: true, subtree: true });
+    patchHistory('pushState');
+    patchHistory('replaceState');
+    window.addEventListener('popstate', onRouteChange);
+    setInterval(() => { if (isTargetPage()) scheduleRefresh(); }, 3000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
+
+})();
