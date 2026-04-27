@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         LinkedIn — Otomatik Dil Filtresi
-// @name:en      LinkedIn — Auto Language Filter
-// @namespace    li-lang-filter
+// @name         language filter
+// @name:en      language filter
+// @namespace    https://github.com/t4r1k255/Linkedin-lang-filter
 // @version      1.0.0
 // @description  İş ilanlarını ve feed gönderilerini dil tespitine göre filtreler. İzin verilen dillerin dışındaki içerikleri gizler veya etiketler.
 // @description:en Filters job listings and feed posts by detected language. Hides or labels content outside your allowed languages.
