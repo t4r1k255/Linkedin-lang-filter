@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         language filter
-// @name:en      language filter
+// @name         linkedin için dil filtresi
+// @name:en      Language filter for linkedin
 // @namespace    https://github.com/t4r1k255/Linkedin-lang-filter
 // @version      1.0.0
 // @description  İş ilanlarını ve feed gönderilerini dil tespitine göre filtreler. İzin verilen dillerin dışındaki içerikleri gizler veya etiketler.
