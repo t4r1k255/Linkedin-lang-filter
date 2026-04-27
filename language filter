@@ -5,6 +5,7 @@
 // @version      1.0.0
 // @description  İş ilanlarını ve feed gönderilerini dil tespitine göre filtreler. İzin verilen dillerin dışındaki içerikleri gizler veya etiketler.
 // @description:en Filters job listings and feed posts by detected language. Hides or labels content outside your allowed languages.
+// @author       t4r1k255
 // @match        https://www.linkedin.com/*
 // @grant        none
 // @run-at       document-idle
