@@ -4,7 +4,36 @@ LinkedIn iş ilanlarını ve feed gönderilerini **dil tespitine göre** otomati
 
 ---
 
-## ✨ Özellikler
+**[English](#english) · [Türkçe](#türkçe)**
+
+---
+
+## English
+
+Filters LinkedIn job postings and feed posts by detected language. Content outside the languages you allow is hidden or labeled.
+
+### Features
+
+- Works on both `/jobs` listings and the main feed
+- 14 languages: TR, EN, DE, FR, ES, PT, IT, NL, RU, PL, ZH, JA, KO, AR
+- Two modes: **Hide** or **Label** (adds a language tag)
+- You decide what happens to content whose language cannot be detected
+- Lightweight n-gram detector with about 5 KB of profile data, no large model
+- Handles LinkedIn's single-page navigation (`pushState` / `popstate`); settings stored in `localStorage`
+
+### Install
+
+1. Install the [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/) browser extension.
+2. **[Click here to install the script](https://github.com/t4r1k255/Linkedin-lang-filter/raw/main/linkedin-lang-filter.user.js)** and confirm with **Install**.
+3. Open or refresh LinkedIn.
+
+Independent community tool, not affiliated with LinkedIn.
+
+---
+
+## Türkçe
+
+### ✨ Özellikler
 
 - **İş İlanı Filtresi** — `/jobs` sayfasındaki ilanları dile göre gizler veya etiketler
 - **Feed Filtresi** — Ana akıştaki gönderileri dile göre filtreler
@@ -17,7 +46,9 @@ LinkedIn iş ilanlarını ve feed gönderilerini **dil tespitine göre** otomati
 
 ---
 
-## 🖥️ Kurulum
+### 🖥️ Kurulum
+
+**En kolay yol:** [Scripti kurmak için buraya tıkla](https://github.com/t4r1k255/Linkedin-lang-filter/raw/main/linkedin-lang-filter.user.js) ve **Install / Yükle**'ye bas. Elle kurmak istersen:
 
 ### 1. Userscript Yöneticisi Kur
 
@@ -43,7 +74,7 @@ Tarayıcına uygun eklentiyi yükle:
 
 ---
 
-## 🎛️ Kullanım
+### 🎛️ Kullanım
 
 ### Rozet (Badge)
 
@@ -69,7 +100,7 @@ Değişiklikleri uygulamak için **"Uygula"** butonuna tıkla. **"Sıfırla"** b
 
 ---
 
-## ⚙️ Varsayılan Ayarlar
+### ⚙️ Varsayılan Ayarlar
 
 ```js
 {
@@ -83,7 +114,7 @@ Değişiklikleri uygulamak için **"Uygula"** butonuna tıkla. **"Sıfırla"** b
 
 ---
 
-## 🔍 Dil Tespit Motoru
+### 🔍 Dil Tespit Motoru
 
 Script, harici API veya ağ isteği kullanmaz. Tüm tespit **tarayıcı içinde, çevrimdışı** çalışır:
 
@@ -97,7 +128,7 @@ Script, harici API veya ağ isteği kullanmaz. Tüm tespit **tarayıcı içinde,
 
 ---
 
-## 🌍 Desteklenen Diller
+### 🌍 Desteklenen Diller
 
 | Kod | Dil | Kod | Dil |
 |---|---|---|---|
@@ -111,12 +142,12 @@ Script, harici API veya ağ isteği kullanmaz. Tüm tespit **tarayıcı içinde,
 
 ---
 
-## 📄 Lisans
+### 📄 Lisans
 
 MIT — Dilediğin gibi kullanabilir, değiştirebilir ve dağıtabilirsin.
 
 ---
 
-## ⚠️ Yasal Uyarı
+### ⚠️ Yasal Uyarı
 
 Bu script LinkedIn ile herhangi bir bağlantısı olmayan bağımsız bir topluluk aracıdır. LinkedIn'in [Kullanım Koşulları](https://www.linkedin.com/legal/user-agreement)'na uygun şekilde kullan.
